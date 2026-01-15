@@ -6,6 +6,8 @@
     <title>Unified Schedule Viewer (Final)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- PDF.js (single-page rendering for iOS-safe PDF viewing) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.js"></script>
     <!-- Firebase SDKs -->
     <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js" type="module"></script>
     <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js" type="module"></script>
@@ -20,7 +22,7 @@
         .view-toggle-button { transition: all 0.2s; white-space: nowrap; }
         .view-toggle-button.active { background-color: #4f46e5; color: white; border-color: #4f46e5; }
         
-        /* RESTORED: Scrollable Selection Lists for Relief View */
+        /* Scrollable Selection Lists for Relief View */
         .teacher-select-container { 
             height: 150px; 
             overflow-y: auto; 
@@ -38,12 +40,18 @@
         .free-slot { background-color: #d1fae5; color: #065f46; font-weight: 600; font-size: 0.7rem; }
         .unavailable-slot { background-color: #f3f4f6; color: #9ca3af; font-size: 0.7rem; }
         .busy-slot { background-color: #fee2e2; font-size: 0.7rem; }
-        .rehat-slot { background-color: #fef3c7; }
         
-        /* Relief Card Conflicts */
+        /* Relief Card Conflicts & Highlights */
         option.conflict-warning { background-color: #fee2e2; color: #b91c1c; font-weight: bold; }
         option.time-conflict { background-color: #991b1b; color: white; font-weight: bold; }
         select.has-conflict { border-color: #ef4444; background-color: #fff5f5; color: #b91c1c; font-weight: 600; }
+
+        /* Highlight for Day Select when teacher is chosen */
+        option.highlight-day-option {
+            background-color: #dbeafe !important; /* Light Indigo/Blue */
+            color: #1e40af !important; /* Dark Indigo/Blue */
+            font-weight: 800 !important;
+        }
 
         /* SMART CLASS VIEW: Sticky Table Styles */
         .smart-table-container { 
@@ -92,13 +100,12 @@
         .loader { border: 3px solid #f3f3f3; border-radius: 50%; border-top: 3px solid #4f46e5; width: 24px; height: 24px; animation: spin 1s linear infinite; margin: 0 auto; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
+        /* FIX: Ensure buttons are tappable */
+        button { touch-action: manipulation; }
         
-        /* FIX: Ensure settings gear is always tappable on iOS */
-        #settings-btn { position: relative; z-index: 80; pointer-events: auto; touch-action: manipulation; }
-        #settings-btn svg { pointer-events: none; }
-@media print {
+        @media print {
             body { background: white; color: black; font-size: 12px; }
-            header, .no-print, #settings-btn, .view-toggle-button, #view-relief-btn, #view-slot-btn, #view-teacher-btn, #view-class-btn, #view-edit-btn, #loading-indicator, #relief-view > div:first-child, #roster-generation-section, #absent-details-container { display: none !important; }
+            header, .no-print, #settings-btn, #view-pdf-btn, .view-toggle-button, #view-relief-btn, #view-slot-btn, #view-teacher-btn, #view-class-btn, #view-edit-btn, #loading-indicator, #relief-view > div:first-child, #roster-generation-section, #absent-details-container { display: none !important; }
             #relief-rosters-display { display: block !important; }
             .smart-table-container { overflow: visible; border: none; box-shadow: none; max-height: none; }
             .smart-table td, .smart-table th { position: static !important; border: 1px solid black !important; }
@@ -113,18 +120,28 @@
             <div>
                 <h1 class="text-2xl sm:text-3xl font-bold text-gray-800">Unified Schedule Viewer</h1>
                 <p id="current-day-display" class="text-indigo-600 font-semibold mt-1"></p>
-                <p class="text-center text-gray-500 text-sm mt-1">SMK Seri Pulai Perdana</p>
+                <div id="connection-status" class="text-xs font-mono text-gray-400 mt-1 flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-gray-400" id="status-dot"></span>
+                    <span id="status-text">Initializing...</span>
+                </div>
             </div>
-            <button id="settings-btn" class="p-2 rounded-full text-gray-500 hover:text-indigo-600 hover:bg-gray-100 transition-colors" title="Open Settings">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-            </button>
+            <div class="flex gap-2">
+                <!-- PDF View Button -->
+                <button id="view-pdf-btn" class="flex items-center gap-1 bg-red-100 text-red-700 hover:bg-red-200 px-3 py-2 rounded-lg transition-colors text-sm font-bold" title="View Reference PDF">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+                    <span class="hidden sm:inline">View PDF</span>
+                </button>
+                <!-- Settings Button -->
+                <button id="settings-btn" class="p-2 rounded-full text-gray-500 hover:text-indigo-600 hover:bg-gray-100 transition-colors" title="Open Settings">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                </button>
+            </div>
         </header>
         
-        <div id="loading-indicator" class="text-center mt-2 no-print">
+        <div id="loading-indicator" class="text-center mt-10 mb-10 no-print">
             <div class="loader"></div>
-            <p class="text-sm text-gray-500">Connecting to Database...</p>
+            <p class="text-sm text-gray-500 mt-4">Connecting to Database...</p>
         </div>
-        <div id="db-status" class="text-center mt-2 text-xs font-mono text-gray-400"></div>
 
         <!-- Main View Toggler -->
         <div id="main-content" style="display:none;">
@@ -215,7 +232,7 @@
                 <div id="class-schedules-container" class="mt-4"></div>
             </div>
 
-            <!-- EDIT MANAGER VIEW (Fixed) -->
+            <!-- EDIT MANAGER VIEW -->
             <div id="edit-view" class="view-container">
                 <div class="max-w-4xl mx-auto">
                     <div class="bg-indigo-50 p-4 rounded-lg border border-indigo-200 mb-4">
@@ -343,7 +360,7 @@
                 <p id="master-status" class="text-xs mt-2 font-mono text-center text-emerald-700 h-4"></p>
             </div>
 
-<div class="border-t pt-4">
+            <div class="border-t pt-4">
                 <h3 class="font-bold text-gray-800 mb-3 text-sm text-center">Database Summary (Listing)</h3>
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-3 h-80">
                     <div class="flex flex-col h-full">
@@ -372,7 +389,43 @@
         </div>
     </div>
 
-    <!-- EDIT ENTRY MODAL (Strict Dropdowns) -->
+    <!-- PDF VIEWER MODAL -->
+    <div id="pdf-modal" class="modal">
+        <div class="modal-content relative w-full h-full max-w-6xl max-h-[90vh] flex flex-col p-0 overflow-hidden">
+             <div class="bg-gray-800 text-white p-3 flex flex-wrap justify-between items-center shrink-0 gap-2">
+                 <h3 class="font-bold text-sm sm:text-lg">Reference Schedule (Guru_2026.pdf)</h3>
+                 
+                 <!-- Page Jumper + iOS-safe open button -->
+                 <div class="flex items-center gap-2">
+                     <span class="text-xs text-gray-400 hidden sm:inline">Teacher:</span>
+                     <select id="pdf-page-jumper" class="text-black text-xs p-1 rounded max-w-[160px]">
+                         <option value="1">-- Select --</option>
+                         <!-- JS will populate -->
+                     </select>
+                     <button id="pdf-open-tab-btn" class="bg-green-600 hover:bg-green-500 text-white text-xs px-3 py-1 rounded font-bold shadow">Open PDF</button>
+                     <span id="pdf-jump-status" class="text-[10px] text-green-300 font-mono hidden sm:inline"></span>
+                 </div>
+
+                 <button id="close-pdf-btn" class="text-gray-300 hover:text-white">
+                     <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                 </button>
+             </div>
+             <div class="flex-1 bg-gray-100 relative overflow-auto">
+                 <!-- iOS-safe single page render -->
+                 <div id="pdf-canvas-wrap" class="w-full h-full flex items-start justify-center p-2">
+                     <div class="w-full max-w-4xl">
+                         <div id="pdf-render-status" class="text-center text-xs text-gray-500 py-2"></div>
+                         <canvas id="pdf-canvas" class="w-full bg-white shadow rounded"></canvas>
+                         <div id="pdf-render-hint" class="text-center text-[11px] text-gray-400 mt-2">
+                             Tip: Use “Open PDF” to open the full document in a new tab.
+                         </div>
+                     </div>
+                 </div>
+             </div>
+        </div>
+    </div>
+
+    <!-- EDIT ENTRY MODAL -->
     <div id="edit-entry-modal" class="modal">
         <div class="modal-content relative p-6 w-full max-w-md">
             <h2 class="text-lg font-bold mb-4 text-indigo-700 border-b pb-2">Edit Schedule Slot</h2>
@@ -406,11 +459,14 @@
     </div>
 
 <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    
+    // iOS iframe safety shim (prevents undefined global errors)
+    window.fireauth = null;
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
     import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
     import { getFirestore, collection, getDocs, doc, writeBatch, updateDoc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-    const firebaseConfig = {
+    let firebaseConfig = {
       apiKey: "AIzaSyBgvyb95-jujtCC2HPiHXLdYMJgQquIEx4",
       authDomain: "jadual-3f0aa.firebaseapp.com",
       projectId: "jadual-3f0aa",
@@ -418,6 +474,10 @@
       messagingSenderId: "496526436851",
       appId: "1:496526436851:web:78ff48b28bfc8c31f14a86"
     };
+
+    if (typeof __firebase_config !== 'undefined') {
+        firebaseConfig = JSON.parse(__firebase_config);
+    }
 
     const app = initializeApp(firebaseConfig);
     const auth = getAuth(app);
@@ -428,16 +488,42 @@
     const days = ["ISNIN", "SELASA", "RABU", "KHAMIS", "JUMAAT"];
     const REASONS = ["CRK", "UBBI", "CB", "KEM", "MSSJ", "MC", "Bengkel"];
     
-    // UPDATED JUNK FILTER WITH NEW ENTRIES
+    // UPDATED JUNK FILTER
     const JUNK_FILTER = [
         "LEGOLAND", "B. NILAM", "B.NILAM", "MAK.", "BENGKEL", "BGKEL", "B.LUKISAN", "KANTIN", "DEWAN", "PADANG", "BILIK", "M.KOM", "M. KOM", "PA", "PJ", "REHAT", "ASSEMBLY", "T3", "T5", "SURAU", "DATARAN", "PERHIMPUNAN", "PSS", "ISNIN", "SELASA", "RABU", "KHAMIS", "JUMAAT", "KOMPUTER", "SAINS", "FIZIK", "KIMIA", "BIO", "PJK", "RBT", "ASK", "PSV", "SEJARAH", "GEOGRAFI", "MATH", "BI", "BM", "PI", "PM", "BC", "BT", "UNKNOWN", "N/A", "GURU", "KELAS", "SUBJEK", "RELI", "LAB", "LIB", "BLK", "ARAS", "LEVEL", "LIBRARY", "&", "AHMA", "A IN",
         "1 ALKHA", "1 ALKHAWARIZMI", "1 ALKIND", "1 ALKINDI", "2 ALKHA", "2 ALKHAWARIZMI", "2 ALKIND", "2 ALKINDI", "3 AL-BUK", "3 AL-BUKHARI", "3 ALKHA", "3 ALKHAWARIZMI", "3 ALKIN", "3 ALKINDI", "4AP1", "4AP2", "4PTS", "4PTW", "4S1", "4S2", "4S3", "4SN1", "4SN2", "4TS1", "4TS2", "5AAP", "5AP", "5PTS", "5PTW", "5S1", "5S2", "5S3", "5SN1", "5SN2", "5TS1", "5TS2", "B. NILAM LAU", "B.LUKISAN IQBAL", "B.LUKISAN NIK", "BGKEL R NIVETHA", "BGKPL .E ROSLINA", "LEGOLAND FAUZI", "LEGOLAND HAJAR", "LEGOLAND HASLINA", "LEGOLAND NADIA", "M. KOM 2 NADIA", "M. KOMP 2N. MASRUL", "MAK. BIO HAJAR", "MAK. BIO NOROSNIZA", "MAK. FIZ ARFAH", "MAK. FIZ MALINA", "MAK. KIM SYAMIMI"
     ];
 
-    
+    // --- PDF PAGE MAPPING (Based on 2026 PDF) ---
+    const TEACHER_PDF_MAPPING = {
+        "ABD AZIZ": 1, "ZURAIHA": 2, "FAUZI": 3, "JUHAIDA": 4, "ZURINA": 5, "GOWRY": 6, "IMELDA": 7, "ROSLINA": 8, "AHMAD RAZIKKI": 9, "AZHARUDIN": 10,
+        "EIDAYU": 11, "EFAH": 12, "GURCHAN": 13, "HANIM": 14, "HASLINA": 15, "IQBAL": 16, "IRDA": 17, "KALAIVANI": 18, "KARTINI": 19, "LAU": 20,
+        "MALINA": 21, "MASJUKI": 22, "MASRIZAN": 23, "MASRULHUDA": 24, "MASRULISAH": 25, "NAZRI": 26, "RIDZUAN": 27, "ROZALI": 28, "NAZARIAH": 29, "NIK NORMAHIZAN": 30,
+        "NIVETHA": 31, "NORARFAH": 32, "NOROSNIZA": 33, "SYAMIMI": 34, "NURA IDRIS": 35, "NURASHIDAH": 36, "HAZIQAH": 37, "NURUL AQILAH": 38, "RAIHAH": 39, "ROSIEATI": 40,
+        "RUHAZANA": 41, "SARASWADI": 42, "SHAH RIDHA": 43, "SHARUL": 44, "SITI HAJAR": 45, "SITI NADIA": 46, "SITI HANIS": 47, "SITI NUR SALMA": 48, "NURAIN": 49, "QALILAH": 50,
+        "SUHAILA": 51, "THEVANDRAN": 52, "TILLAGA": 53, "ZALIKHA": 54, "ZUHDAH": 55, "NABIHAH": 56, "FAEZAH": 57, "FARIS": 58, "IZZAH": 59, "ASIAH": 60
+    };
+
+    // --- CONNECTION STATUS HANDLER ---
+    function updateStatus(state, message) {
+        const dot = document.getElementById('status-dot');
+        const text = document.getElementById('status-text');
+        
+        text.textContent = message;
+        dot.className = "w-2 h-2 rounded-full";
+        
+        if (state === 'connecting') {
+            dot.classList.add("bg-yellow-400", "animate-pulse");
+        } else if (state === 'connected') {
+            dot.classList.add("bg-green-500");
+        } else if (state === 'error') {
+            dot.classList.add("bg-red-500");
+        } else if (state === 'empty') {
+            dot.classList.add("bg-orange-500");
+        }
+    }
 
     // --- MASTER LISTS (Teachers / Subjects / Locations) ---
-    // Stored separately so you can add new values even if they are not present in current schedules.
     const MASTER_LISTS_DOC = doc(db, 'artifacts', appId, 'public', 'data', 'meta', 'masterLists');
     let MASTER_LISTS = { teachers: [], subjects: [], locations: [] };
 
@@ -458,7 +544,6 @@
     }
 
     async function saveMasterLists() {
-        // Merge write to avoid wiping other fields.
         await setDoc(MASTER_LISTS_DOC, MASTER_LISTS, { merge: true });
     }
 
@@ -497,7 +582,8 @@
         (MASTER_LISTS.subjects || []).forEach(s => subjectsSet.add(s));
         (MASTER_LISTS.locations || []).forEach(l => locationsSet.add(l));
     }
-// Utility Functions
+    
+    // Utility Functions
     function cleanTimeSlot(rawSlot) {
         if (!rawSlot || typeof rawSlot !== 'string') return "";
         const match = rawSlot.match(/\d{1,2}:\d{2}-\d{1,2}:\d{2}/);
@@ -524,7 +610,6 @@
         return true;
     }
     
-    // Smart Color Coding
     function getSubjectStyle(subject) {
         if (!subject) return '';
         const s = subject.trim().toUpperCase();
@@ -562,15 +647,6 @@
         return processed;
     }
     
-    function getMasterTimeSlots(schedules) {
-        const allSlots = new Set();
-        schedules.forEach(c => c.timeSlots.forEach(slot => {
-            const s = cleanTimeSlot(slot);
-            if (s && s !== "2:00-3:00") allSlots.add(s);
-        }));
-        return Array.from(allSlots).sort((a, b) => timeToMinutes(a.split('-')[0]) - timeToMinutes(b.split('-')[0]));
-    }
-
     function findCoveringPeriod(slot, busyPeriods) {
         if(!busyPeriods) return null;
         for (const busyPeriod of busyPeriods) {
@@ -611,16 +687,205 @@
         const dayIdx = today.getDay();
         const currentDayName = (dayIdx >= 1 && dayIdx <= 5) ? days[dayIdx-1] : "ISNIN";
         
+        if (allSchedules.length === 0) {
+            updateStatus('empty', 'Database Empty. Please upload JSON.');
+            // Auto open settings if empty
+            document.getElementById('settings-modal').classList.add('open');
+        } else {
+            updateStatus('connected', `Data Loaded (${allSchedules.length} classes)`);
+        }
+
         setupReliefView(currentDayName, allSchedules, teacherData);
         setupGroupAvailabilityView(currentDayName, allSchedules, teacherData);
         setupTeacherView(currentDayName, allSchedules, teacherData);
         setupSmartClassView(currentDayName, allSchedules);
         setupEditView(allSchedules); 
         setupViewToggler();
-        setupSettingsModal(allSchedules); // Pass data to settings
+        setupSettingsModal(allSchedules); 
+        setupPDFViewer(); // Init PDF Viewer
     }
 
-    // --- RELIEF VIEW (Restored Original Scroll Layout) ---
+    function setupPDFViewer() {
+        const btn = document.getElementById('view-pdf-btn');
+        const modal = document.getElementById('pdf-modal');
+        const close = document.getElementById('close-pdf-btn');
+        const jumper = document.getElementById('pdf-page-jumper');
+        const openBtn = document.getElementById('pdf-open-tab-btn');
+        const status = document.getElementById('pdf-jump-status');
+        const renderStatus = document.getElementById('pdf-render-status');
+        const canvas = document.getElementById('pdf-canvas');
+
+        const baseUrl = "https://gowsmk.github.io/Unified_Schedule_Viewer/Guru_2026.pdf";
+
+        // iOS/Safari note:
+        // - PDF fragment jumps (#page=) are unreliable inside <iframe>
+        // - Native PDF viewers show continuous pages (you may see "more than one page")
+        // Solution:
+        // - Render ONLY the selected page using PDF.js inside the modal
+        // - "Open PDF" opens a dedicated single-page view (this same app in a new tab)
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+        let lastTeacher = null;
+
+        // PDF.js setup
+        const pdfjs = window.pdfjsLib;
+        // iOS / WebView safety: disable worker to avoid cross-origin worker issues
+        if (pdfjs && isIOS) { try { pdfjs.disableWorker = true; } catch (_) {} }
+        let pdfDoc = null;
+        if (pdfjs && pdfjs.GlobalWorkerOptions) {
+            // Use CDN worker for reliability
+            pdfjs.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.js";
+            // iOS Safari is more stable without a web worker for PDF.js
+            if (isIOS) {
+                try { pdfjs.disableWorker = true; } catch (_) {}
+            }
+        }
+
+        async function ensurePdfLoaded() {
+            if (location.protocol === 'file:') {
+                throw new Error('PDF preview requires HTTPS hosting (not file://).');
+            }
+            if (!pdfjs) throw new Error('PDF.js not loaded');
+            if (pdfDoc) return pdfDoc;
+            if (renderStatus) renderStatus.textContent = 'Loading PDF…';
+            if (!/^https?:$/i.test(location.protocol)) {
+                throw new Error('PDF preview requires https hosting (GitHub Pages).');
+            }
+            pdfDoc = await pdfjs.getDocument({ url: baseUrl }).promise;
+            return pdfDoc;
+        }
+
+        async function renderPage(pageNum) {
+            try {
+                const doc = await ensurePdfLoaded();
+                const page = await doc.getPage(Math.max(1, Math.min(pageNum || 1, doc.numPages)));
+
+                // Fit to container width
+                const wrap = document.getElementById('pdf-canvas-wrap');
+                const maxW = (wrap?.clientWidth || window.innerWidth) - 24;
+                const viewport1 = page.getViewport({ scale: 1 });
+                const scale = Math.max(0.5, Math.min(3, maxW / viewport1.width));
+                const viewport = page.getViewport({ scale });
+
+                const ctx = canvas.getContext('2d');
+                canvas.width = Math.floor(viewport.width);
+                canvas.height = Math.floor(viewport.height);
+                if (renderStatus) renderStatus.textContent = `Showing page ${pageNum}`;
+                await page.render({ canvasContext: ctx, viewport }).promise;
+            } catch (err) {
+                console.error('PDF render error:', err);
+                if (renderStatus) renderStatus.textContent = 'Unable to render PDF preview here. Tap "Open PDF" (opens correct page), or host this file on HTTPS to enable preview.';
+            }
+        }
+
+        // Populate Dropdown (teacher -> page)
+        jumper.innerHTML = '<option value="1">-- Select --</option>';
+        Object.keys(TEACHER_PDF_MAPPING).sort().forEach((key) => {
+            const opt = document.createElement('option');
+            opt.value = TEACHER_PDF_MAPPING[key];
+            opt.text = key;
+            jumper.appendChild(opt);
+        });
+
+        // Determine best page based on current UI context
+        const findActiveTeacher = () => {
+            if (lastTeacher) return lastTeacher;
+            const teacherSelect = document.getElementById('teacher-select');
+            if (teacherSelect && teacherSelect.value && document.getElementById('teacher-view').classList.contains('active')) {
+                return teacherSelect.value;
+            }
+            const absentContainer = document.getElementById('absent-teacher-multiselect');
+            if (absentContainer && document.getElementById('relief-view').classList.contains('active')) {
+                const checked = absentContainer.querySelector('input:checked');
+                if (checked) return checked.value;
+            }
+            return null;
+        };
+
+        const getPageForTeacher = (teacherName) => {
+            if (!teacherName) return { page: 1, label: 'Index' };
+            const norm = normalizeTeacherName(teacherName);
+            const foundKey = Object.keys(TEACHER_PDF_MAPPING).find(k => norm.includes(k) || k.includes(norm));
+            if (foundKey) return { page: TEACHER_PDF_MAPPING[foundKey], label: foundKey };
+            return { page: 1, label: 'Index' };
+        };
+
+        const syncToTeacher = (teacherName, notePrefix = 'Auto') => {
+            if (teacherName) lastTeacher = teacherName;
+            const { page, label } = getPageForTeacher(teacherName);
+            jumper.value = String(page);
+            if (status) status.textContent = teacherName ? `${notePrefix}: ${label} (Pg ${page})` : 'Select a teacher';
+
+            // Always render only the selected page in-modal
+            renderPage(page);
+            configureOpenButton(page, label);
+            return { page, label };
+        };
+
+        // Expose a small hook so other UI (Relief Pool / Absent list / Relief selection) can update the PDF target
+        window.__setPdfTeacher = (name) => syncToTeacher(name, 'Selected');
+
+        const configureOpenButton = (page, label) => {
+            // Open a dedicated single-page view (this same app in a new tab)
+            // This avoids native PDF viewers that show continuous pages.
+            openBtn.onclick = () => {
+                const u = new URL(window.location.href);
+                u.searchParams.set('pdfPage', String(page || 1));
+                if (label) u.searchParams.set('pdfTeacher', label);
+                u.hash = 'pdf';
+                window.open(u.toString(), '_blank');
+            };
+        };
+
+        const openModal = () => {
+            // iOS/Safari PDF rules:
+            // - Do NOT try to navigate pages inside an iframe with #page (often fails)
+            // - Use window.open for page navigation
+            // - Keep iframe on base URL only (preview)
+
+            const activeTeacher = findActiveTeacher();
+            const { page, label } = syncToTeacher(activeTeacher, 'Auto');
+            modal.classList.add('open');
+        };
+
+        const closeModal = () => {
+            modal.classList.remove('open');
+            if (status) status.textContent = '';
+            if (renderStatus) renderStatus.textContent = '';
+        };
+
+        btn.onclick = () => {
+            if (!modal.classList.contains('open')) openModal();
+            else closeModal();
+        };
+        close.onclick = closeModal;
+        modal.onclick = (e) => { if (e.target === modal) closeModal(); };
+
+        jumper.onchange = (e) => {
+            const page = Number(e.target.value || 1);
+            configureOpenButton(page, jumper.options[jumper.selectedIndex]?.text || '');
+            if (status) status.textContent = `Ready: Page ${page}`;
+            renderPage(page);
+        };
+
+        // Default open button
+        configureOpenButton(1, '');
+
+        // Auto-open single-page view if this tab was opened via Open PDF
+        try {
+            const u = new URL(window.location.href);
+            const qp = u.searchParams.get('pdfPage');
+            if (qp) {
+                const page = Number(qp || 1);
+                const teacherLabel = u.searchParams.get('pdfTeacher') || '';
+                jumper.value = String(page);
+                if (status) status.textContent = teacherLabel ? `Opened: ${teacherLabel} (Pg ${page})` : `Opened: Pg ${page}`;
+                modal.classList.add('open');
+                renderPage(page);
+            }
+        } catch (_) {}
+    }
+
+    // --- RELIEF VIEW ---
     function setupReliefView(currentDayName, allSchedules, teacherData) {
         const container = document.getElementById('relief-results');
         const daySelect = document.getElementById('relief-day-select');
@@ -643,6 +908,50 @@
             opt.value = d; opt.text = d;
             if(d === currentDayName) opt.selected = true;
             daySelect.appendChild(opt);
+        });
+        
+        // NEW: HIGHLIGHT FUNCTION
+        const updateDayHighlights = () => {
+            const selectedAbsent = Array.from(absentContainer.querySelectorAll('input:checked')).map(i => i.value);
+            const options = daySelect.querySelectorAll('option');
+            
+            // Reset styles
+            options.forEach(opt => {
+                opt.classList.remove('highlight-day-option');
+                opt.text = opt.value; 
+            });
+
+            if (selectedAbsent.length === 0) return;
+
+            days.forEach(day => {
+                let classCount = 0;
+                selectedAbsent.forEach(teacher => {
+                    if (teacherData[teacher] && teacherData[teacher].schedule && teacherData[teacher].schedule[day]) {
+                        const classes = teacherData[teacher].schedule[day];
+                        if (classes.length > 0) {
+                            classCount += classes.length;
+                        }
+                    }
+                });
+
+                if (classCount > 0) {
+                    const opt = Array.from(options).find(o => o.value === day);
+                    if (opt) {
+                        opt.classList.add('highlight-day-option');
+                        opt.text = `${day} (${classCount} Classes)`;
+                    }
+                }
+            });
+        };
+        
+        absentContainer.addEventListener('change', updateDayHighlights);
+
+        // NEW: When you tick an absent teacher, sync PDF target to that teacher
+        absentContainer.addEventListener('change', (e) => {
+            const t = e?.target;
+            if (t && t.matches && t.matches('input[type=checkbox]') && t.checked) {
+                if (typeof window.__setPdfTeacher === 'function') window.__setPdfTeacher(t.value);
+            }
         });
 
         // Filter Function
@@ -733,7 +1042,12 @@
                 
                 const select = card.querySelector('select');
                 if(currentSelections.has(slotId)) select.value = currentSelections.get(slotId);
-                select.onchange = (e) => { currentSelections.set(slotId, e.target.value); updateConflicts(); };
+                select.onchange = (e) => {
+                    currentSelections.set(slotId, e.target.value);
+                    // NEW: When you assign a relief teacher, sync PDF target to that teacher
+                    if (e.target.value && typeof window.__setPdfTeacher === 'function') window.__setPdfTeacher(e.target.value);
+                    updateConflicts();
+                };
                 container.appendChild(card);
             });
             
@@ -779,8 +1093,13 @@
             renderAbsentDetails(absent);
             render();
         };
-        
-        pool.addEventListener('change', () => { if(container.children.length > 0) render(); }); 
+        pool.addEventListener('change', (e) => {
+            const t = e?.target;
+            if (t && t.matches && t.matches('input[type=checkbox]') && t.checked) {
+                if (typeof window.__setPdfTeacher === 'function') window.__setPdfTeacher(t.value);
+            }
+            if (container.children.length > 0) render();
+        }); 
 
         document.getElementById('generate-rosters-btn').onclick = () => {
             const roster = [];
@@ -931,7 +1250,7 @@
         }
     }
 
-    // --- EDIT VIEW (FIXED & RESTORED) ---
+    // --- EDIT VIEW ---
     function setupEditView(allSchedules) {
         const classSelect = document.getElementById('edit-class-select');
         const daySelect = document.getElementById('edit-day-select');
@@ -944,7 +1263,6 @@
         const deleteBtn = document.getElementById('delete-slot-btn');
         const editStatus = document.getElementById('edit-status-msg');
         
-        // Collect Data for Dropdowns
         const allPeriods = new Set();
         const allTeachers = new Set();
         const allSubjects = new Set();
@@ -961,19 +1279,15 @@
             });
         });
 
-        // Include master lists (manual additions)
         mergeMasterIntoSets(allTeachers, allSubjects, allLocations);
 
-        // Populate Main Selects
         classSelect.innerHTML = '<option value="">-- Select Class --</option>';
         allSchedules.sort((a,b) => a.className.localeCompare(b.className)).forEach(s => classSelect.innerHTML += `<option value="${s.className}">${s.className}</option>`);
         daySelect.innerHTML = '<option value="">-- Select Day --</option>';
         daySelect.innerHTML += `<option value="ALL_WEEK">ALL WEEK</option>`;
         days.forEach(d => daySelect.innerHTML += `<option value="${d}">${d}</option>`);
-        // Default to ALL WEEK view
         daySelect.value = 'ALL_WEEK';
         
-        // Populate Modal Dropdowns
         const populateSelect = (id, items) => {
             const select = document.getElementById(id);
             select.innerHTML = '<option value="">-- Select --</option>';
@@ -990,9 +1304,9 @@
         let currentDayData = [];
         let editingIndex = -1;
 
-        let currentWeekData = {}; // {DAY: [slots...]}
+        let currentWeekData = {};
         let editingDay = null;
-        // --- N/A Finder (Schedule Editor) ---
+        
         const isNA = (value) => {
             if (value === undefined || value === null) return true;
             const v = String(value).trim().toUpperCase();
@@ -1002,18 +1316,14 @@
             if (!slot) return true;
             return isNA(slot.subject) || isNA(slot.teacher) || isNA(slot.location);
         };
-
-
         
         const renderTable = () => {
             if(!currentEditingClass || !currentEditingDay) { editArea.classList.add('hidden'); return; }
             editArea.classList.remove('hidden');
             tableBody.innerHTML = '';
 
-            // N/A Finder state
             const naOnlyEl = document.getElementById('filter-na-only');
             const showNAOnly = naOnlyEl ? naOnlyEl.checked : false;
-
             let naCounter = 0;
             let renderedAny = false;
 
@@ -1022,10 +1332,7 @@
                 if (hasNA) naCounter++;
                 if (showNAOnly && !hasNA) return false;
 
-                const periodLabel = (currentEditingDay === 'ALL_WEEK')
-                    ? `${dayLabel} — ${slot.period || ''}`
-                    : (slot.period || '');
-
+                const periodLabel = (currentEditingDay === 'ALL_WEEK') ? `${dayLabel} — ${slot.period || ''}` : (slot.period || '');
                 const tr = document.createElement('tr');
                 tr.className = `hover:bg-gray-50 border-b last:border-0 ${hasNA ? 'bg-yellow-100 border-l-4 border-yellow-500' : ''}`;
                 tr.innerHTML = `
@@ -1043,36 +1350,25 @@
             };
 
             if (currentEditingDay === 'ALL_WEEK') {
-                // Build week data fresh each render (safe, reflects latest in-memory edits)
                 currentWeekData = {};
-                days.forEach(d => {
-                    currentWeekData[d] = [...(currentEditingClass.scheduleData[d] || [])];
-                });
+                days.forEach(d => { currentWeekData[d] = [...(currentEditingClass.scheduleData[d] || [])]; });
 
                 days.forEach(dayName => {
                     const dayData = currentWeekData[dayName] || [];
                     dayData.sort((a,b) => timeToMinutes(cleanTimeSlot(a.period).split('-')[0]) - timeToMinutes(cleanTimeSlot(b.period).split('-')[0]));
 
-                    // Decide if we should show this day section when filtering
                     let willRenderThisDay = !showNAOnly;
-
-                    if (showNAOnly) {
-                        willRenderThisDay = dayData.some(rowHasNA);
-                    }
-
+                    if (showNAOnly) willRenderThisDay = dayData.some(rowHasNA);
                     if (!willRenderThisDay) return;
 
-                    // Day separator row
                     const sep = document.createElement('tr');
                     sep.innerHTML = `<td colspan="5" class="p-2 bg-gray-50 text-gray-700 font-bold">${dayName}</td>`;
                     tableBody.appendChild(sep);
 
-                    if (dayData.length === 0) {
-                        if (!showNAOnly) {
-                            const empty = document.createElement('tr');
-                            empty.innerHTML = `<td colspan="5" class="p-3 text-center text-gray-400 text-xs">No slots defined for ${dayName}.</td>`;
-                            tableBody.appendChild(empty);
-                        }
+                    if (dayData.length === 0 && !showNAOnly) {
+                        const empty = document.createElement('tr');
+                        empty.innerHTML = `<td colspan="5" class="p-3 text-center text-gray-400 text-xs">No slots defined for ${dayName}.</td>`;
+                        tableBody.appendChild(empty);
                         return;
                     }
 
@@ -1082,9 +1378,7 @@
                     });
                 });
             } else {
-                // Single-day view (existing behavior)
                 currentDayData.sort((a,b) => timeToMinutes(cleanTimeSlot(a.period).split('-')[0]) - timeToMinutes(cleanTimeSlot(b.period).split('-')[0]));
-
                 if(currentDayData.length === 0) {
                     tableBody.innerHTML = '<tr><td colspan="5" class="p-4 text-center text-gray-500">No slots defined for this day.</td></tr>';
                 } else {
@@ -1095,18 +1389,10 @@
                 }
             }
 
-            // Update counter / status
             const naCountEl = document.getElementById('na-count');
-            if (naCountEl) {
-                naCountEl.textContent = naCounter > 0 ? `N/A found: ${naCounter}` : 'No N/A detected';
-            }
-
-            // If filtering yields nothing, show a friendly message
-            if (showNAOnly && !renderedAny) {
-                tableBody.innerHTML = '<tr><td colspan="5" class="p-4 text-center text-gray-500">No N/A entries found for the selected scope.</td></tr>';
-            }
-
-            // Wire actions
+            if (naCountEl) naCountEl.textContent = naCounter > 0 ? `N/A found: ${naCounter}` : 'No N/A detected';
+            if (showNAOnly && !renderedAny) tableBody.innerHTML = '<tr><td colspan="5" class="p-4 text-center text-gray-500">No N/A entries found for the selected scope.</td></tr>';
+            
             document.querySelectorAll('.edit-btn').forEach(b => b.onclick = (e) => openModal(e.target.dataset.day, parseInt(e.target.dataset.idx)));
             document.querySelectorAll('.del-btn').forEach(b => b.onclick = (e) => deleteSlot(e.target.dataset.day, parseInt(e.target.dataset.idx)));
         };
@@ -1117,7 +1403,6 @@
             if(cName && dName) {
                 currentEditingClass = allSchedules.find(s => s.className === cName);
                 currentEditingDay = dName;
-
                 if (dName === 'ALL_WEEK') {
                     currentWeekData = {};
                     days.forEach(d => { currentWeekData[d] = [...(currentEditingClass.scheduleData[d] || [])]; });
@@ -1125,7 +1410,6 @@
                 } else {
                     currentDayData = [...(currentEditingClass.scheduleData[dName] || [])];
                 }
-
                 renderTable();
             } else {
                 editArea.classList.add('hidden');
@@ -1135,21 +1419,11 @@
         classSelect.onchange = loadData;
         daySelect.onchange = loadData;
 
-        // N/A Finder controls
         const findNaBtn = document.getElementById('find-na-btn');
         const filterNaOnly = document.getElementById('filter-na-only');
-        if (findNaBtn) {
-            findNaBtn.onclick = () => {
-                if (filterNaOnly) filterNaOnly.checked = false;
-                renderTable();
-            };
-        }
-        if (filterNaOnly) {
-            filterNaOnly.onchange = () => renderTable();
-        }
+        if (findNaBtn) findNaBtn.onclick = () => { if (filterNaOnly) filterNaOnly.checked = false; renderTable(); };
+        if (filterNaOnly) filterNaOnly.onchange = () => renderTable();
 
-
-        // Helper to safely select option or add if missing
         const safeSet = (id, value) => {
             const select = document.getElementById(id);
             if (!value) { select.value = ""; return; }
@@ -1159,14 +1433,10 @@
             select.value = value;
         };
 
-        
         const openModal = (dayName, index) => {
             editingDay = dayName || currentEditingDay;
             editingIndex = index;
-
-            const sourceArray = (currentEditingDay === 'ALL_WEEK')
-                ? (currentWeekData[editingDay] || [])
-                : currentDayData;
+            const sourceArray = (currentEditingDay === 'ALL_WEEK') ? (currentWeekData[editingDay] || []) : currentDayData;
 
             if(index >= 0) {
                 const d = sourceArray[index];
@@ -1187,13 +1457,10 @@
         };
 
         addBtn.onclick = () => {
-            // When in ALL WEEK mode, add uses the currently selected day (if not ALL_WEEK), otherwise default to ISNIN.
-            const targetDay = (currentEditingDay === 'ALL_WEEK') ? 'ISNIN' : currentEditingDay;
+            const targetDay = (currentEditingDay === 'ALL_WEEK') ? (editingDay || 'ISNIN') : currentEditingDay;
             openModal(targetDay, -1);
         };
- () => openModal(-1);
         cancelEditBtn.onclick = () => modal.classList.remove('open');
-
         
         saveEditBtn.onclick = async () => {
             const p = document.getElementById('edit-modal-period').value;
@@ -1204,10 +1471,8 @@
             if(!p || !s) return alert("Period and Subject required!");
 
             const newSlot = { period: cleanTimeSlot(p), subject: s, teacher: t, location: l };
-
             const dayToSave = (currentEditingDay === 'ALL_WEEK') ? (editingDay || 'ISNIN') : currentEditingDay;
 
-            // Determine which array to modify
             let targetArray;
             if (currentEditingDay === 'ALL_WEEK') {
                 if (!currentWeekData[dayToSave]) currentWeekData[dayToSave] = [];
@@ -1226,15 +1491,9 @@
                 updatePayload[`scheduleData.${dayToSave}`] = targetArray;
                 await updateDoc(docRef, updatePayload);
 
-                // Update in-memory source of truth
                 currentEditingClass.scheduleData[dayToSave] = targetArray;
-
                 modal.classList.remove('open');
-
-                // Re-render view (week/day)
-                if (currentEditingDay !== 'ALL_WEEK') {
-                    currentDayData = [...targetArray];
-                }
+                if (currentEditingDay !== 'ALL_WEEK') currentDayData = [...targetArray];
                 renderTable();
             } catch(e) {
                 editStatus.innerHTML = `<span class="text-red-500">Error: ${e.message}</span>`;
@@ -1242,8 +1501,6 @@
         };
 
         deleteBtn.onclick = () => deleteSlot((currentEditingDay === 'ALL_WEEK') ? (editingDay || 'ISNIN') : currentEditingDay, editingIndex);
- () => deleteSlot(editingIndex);
-
         
         const deleteSlot = async (dayName, index) => {
             const dayToDelete = (currentEditingDay === 'ALL_WEEK') ? (dayName || 'ISNIN') : currentEditingDay;
@@ -1255,9 +1512,7 @@
             } else {
                 targetArray = [...currentDayData];
             }
-
             targetArray.splice(index, 1);
-
             editStatus.textContent = "Deleting...";
             try {
                 const docRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME, currentEditingClass.className);
@@ -1266,12 +1521,8 @@
                 await updateDoc(docRef, updatePayload);
 
                 currentEditingClass.scheduleData[dayToDelete] = targetArray;
-
                 modal.classList.remove('open');
-
-                if (currentEditingDay !== 'ALL_WEEK') {
-                    currentDayData = [...targetArray];
-                }
+                if (currentEditingDay !== 'ALL_WEEK') currentDayData = [...targetArray];
                 renderTable();
             } catch(e) {
                 alert(e.message);
@@ -1326,7 +1577,6 @@
         const btn = document.getElementById('settings-btn');
         const close = document.getElementById('close-modal-btn');
         
-        // Extract Unique Data for Listing
         const teachers = new Set();
         const subjects = new Set();
         const locations = new Set();
@@ -1335,43 +1585,27 @@
             days.forEach(d => {
                 if(s.scheduleData[d]) {
                     s.scheduleData[d].forEach(entry => {
-                        // Extract Teachers
-                        if(entry.teacher) {
-                             entry.teacher.split('/').forEach(t => {
-                                 const norm = normalizeTeacherName(t);
-                                 if(isValidTeacher(norm)) teachers.add(norm);
-                             });
-                        }
-                        // Extract Subjects
+                        if(entry.teacher) entry.teacher.split('/').forEach(t => { const norm = normalizeTeacherName(t); if(isValidTeacher(norm)) teachers.add(norm); });
                         if(entry.subject) subjects.add(entry.subject.trim());
-                        // Extract Locations
                         if(entry.location) locations.add(entry.location.trim());
                     });
                 }
             });
         });
 
-        // Sort Data
-                // Include master lists (manual additions)
         mergeMasterIntoSets(teachers, subjects, locations);
-
-const sortedTeachers = Array.from(teachers).sort();
+        const sortedTeachers = Array.from(teachers).sort();
         const sortedSubjects = Array.from(subjects).sort();
         const sortedLocations = Array.from(locations).sort();
 
-        // Populate DOM
         document.getElementById('count-teachers').textContent = sortedTeachers.length;
         document.getElementById('list-teachers').value = sortedTeachers.join('\n');
-        
         document.getElementById('count-subjects').textContent = sortedSubjects.length;
         document.getElementById('list-subjects').value = sortedSubjects.join('\n');
-        
         document.getElementById('count-locations').textContent = sortedLocations.length;
         document.getElementById('list-locations').value = sortedLocations.join('\n');
 
-
-
-        // NEW: BULK EDIT LOGIC (MULTI-SELECT)
+        // NEW: BULK EDIT LOGIC
         const bulkType = document.getElementById('bulk-type-select');
         const bulkContainer = document.getElementById('bulk-checkbox-container');
         const bulkSearch = document.getElementById('bulk-list-search');
@@ -1380,7 +1614,7 @@ const sortedTeachers = Array.from(teachers).sort();
         const bulkDeleteBtn = document.getElementById('bulk-delete-btn');
         const bulkStatus = document.getElementById('bulk-status');
 
-        // NEW: MASTER DATA add/remove
+        // NEW: MASTER DATA
         const masterType = document.getElementById('master-type-select');
         const masterVal = document.getElementById('master-new-value');
         const masterAddBtn = document.getElementById('master-add-btn');
@@ -1394,22 +1628,15 @@ const sortedTeachers = Array.from(teachers).sort();
 
             document.getElementById('count-teachers').textContent = sortedTeachers.length;
             document.getElementById('list-teachers').value = sortedTeachers.join('\n');
-
             document.getElementById('count-subjects').textContent = sortedSubjects.length;
             document.getElementById('list-subjects').value = sortedSubjects.join('\n');
-
             document.getElementById('count-locations').textContent = sortedLocations.length;
             document.getElementById('list-locations').value = sortedLocations.join('\n');
 
-
-
-            // keep bulk lists in sync
             window.__bulkSortedTeachers = sortedTeachers;
             window.__bulkSortedSubjects = sortedSubjects;
             window.__bulkSortedLocations = sortedLocations;
         };
-
-        // Initialize master-derived lists into UI
         refreshSummaryAndBulkUI();
 
         const populateBulkList = () => {
@@ -1429,14 +1656,12 @@ const sortedTeachers = Array.from(teachers).sort();
         };
         
         bulkType.onchange = populateBulkList;
-        populateBulkList(); // Init
+        populateBulkList();
 
-        // Init caches for refresh
         window.__bulkSortedTeachers = sortedTeachers;
         window.__bulkSortedSubjects = sortedSubjects;
         window.__bulkSortedLocations = sortedLocations;
 
-        // Master add/remove handlers
         const setMasterMsg = (msg, ok=true) => {
             masterStatus.textContent = msg;
             masterStatus.className = ok ? "text-xs mt-2 font-mono text-center text-emerald-700 h-4" : "text-xs mt-2 font-mono text-center text-red-700 h-4";
@@ -1450,7 +1675,6 @@ const sortedTeachers = Array.from(teachers).sort();
             if(!res.ok) return setMasterMsg(res.msg, false);
             await saveMasterLists();
 
-            // Also add into the in-memory sets for immediate UI update
             const normalized = normalizeMasterValue(type, val);
             if(type === 'teacher') teachers.add(normalized);
             else if(type === 'subject') subjects.add(normalized);
@@ -1478,8 +1702,6 @@ const sortedTeachers = Array.from(teachers).sort();
             setMasterMsg("Removed from master list.");
         };
 
-        
-        // Filter Logic
         bulkSearch.oninput = (e) => {
             const term = e.target.value.toLowerCase();
             const labels = bulkContainer.querySelectorAll('label');
@@ -1495,11 +1717,9 @@ const sortedTeachers = Array.from(teachers).sort();
             const selectedValues = checkedBoxes.map(cb => cb.value);
             
             if(selectedValues.length === 0) return alert("Please select at least one item from the list.");
-            
             const newValue = isDelete ? "" : bulkNew.value.trim().toUpperCase();
             if(!isDelete && !newValue) return alert("Please enter a new value to replace the selected items.");
             
-            // SPECIFIC CONFIRMATION MESSAGE
             const fieldName = type.toUpperCase();
             const actionMsg = isDelete ? `DELETE ${selectedValues.length} items from the ${fieldName} field` : `REPLACE ${selectedValues.length} items with "${newValue}" in the ${fieldName} field`;
             
@@ -1511,20 +1731,15 @@ const sortedTeachers = Array.from(teachers).sort();
 
             allSchedules.forEach(schedule => {
                 let modified = false;
-                const newScheduleData = JSON.parse(JSON.stringify(schedule.scheduleData)); // Deep copy
-
+                const newScheduleData = JSON.parse(JSON.stringify(schedule.scheduleData)); 
                 days.forEach(day => {
                     if(newScheduleData[day]) {
                         newScheduleData[day].forEach(entry => {
-                            // ONLY TOUCH TEACHER FIELD IF TYPE IS TEACHER
                             if(type === 'teacher' && entry.teacher) {
                                 const parts = entry.teacher.split('/');
                                 if (isDelete) {
                                     const newParts = parts.filter(p => !selectedValues.includes(normalizeTeacherName(p)));
-                                    if (newParts.length !== parts.length) {
-                                        entry.teacher = newParts.join(' / ');
-                                        modified = true;
-                                    }
+                                    if (newParts.length !== parts.length) { entry.teacher = newParts.join(' / '); modified = true; }
                                 } else {
                                     const newParts = parts.map(p => {
                                         if(selectedValues.includes(normalizeTeacherName(p))) { modified = true; return newValue; }
@@ -1534,14 +1749,8 @@ const sortedTeachers = Array.from(teachers).sort();
                                     entry.teacher = uniqueParts.join(' / ');
                                 }
                             } 
-                            // ONLY TOUCH SUBJECT FIELD IF TYPE IS SUBJECT
-                            else if(type === 'subject' && entry.subject && selectedValues.includes(entry.subject.trim())) {
-                                entry.subject = newValue; modified = true;
-                            }
-                            // ONLY TOUCH LOCATION FIELD IF TYPE IS LOCATION
-                            else if(type === 'location' && entry.location && selectedValues.includes(entry.location.trim())) {
-                                entry.location = newValue; modified = true;
-                            }
+                            else if(type === 'subject' && entry.subject && selectedValues.includes(entry.subject.trim())) { entry.subject = newValue; modified = true; }
+                            else if(type === 'location' && entry.location && selectedValues.includes(entry.location.trim())) { entry.location = newValue; modified = true; }
                         });
                     }
                 });
@@ -1569,11 +1778,7 @@ const sortedTeachers = Array.from(teachers).sort();
         bulkBtn.onclick = () => performBulkUpdate(false);
         bulkDeleteBtn.onclick = () => performBulkUpdate(true);
 
-        const openSettings = (e) => {
-            // iOS viewers sometimes need explicit touch handling
-            try { e && e.preventDefault && e.preventDefault(); } catch(_) {}
-            modal.classList.add('open');
-        };
+        const openSettings = (e) => { try { e && e.preventDefault && e.preventDefault(); } catch(_) {} modal.classList.add('open'); };
         btn.addEventListener('click', openSettings);
         btn.addEventListener('touchend', openSettings, { passive: false });
         btn.addEventListener('pointerup', openSettings);
@@ -1619,16 +1824,26 @@ const sortedTeachers = Array.from(teachers).sort();
     }
 
     const initAuth = async () => {
+      updateStatus('connecting', 'Authenticating...');
       if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) await signInWithCustomToken(auth, __initial_auth_token);
       else await signInAnonymously(auth);
     };
     initAuth();
+    
     onAuthStateChanged(auth, async (user) => {
         if(user) {
-            const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME));
-            const data = []; snap.forEach(d => data.push(d.data()));
-            await loadMasterLists();
-            initializeUI(data);
+            updateStatus('connecting', 'Connected. Loading Data...');
+            try {
+                const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME));
+                const data = []; snap.forEach(d => data.push(d.data()));
+                await loadMasterLists();
+                initializeUI(data);
+            } catch (error) {
+                console.error(error);
+                updateStatus('error', 'Connection Failed. Check internet/permissions.');
+            }
+        } else {
+             updateStatus('error', 'Auth Failed.');
         }
     });
 </script>
