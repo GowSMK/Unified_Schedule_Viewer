@@ -7,7 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <!-- PDF.js (single-page rendering for iOS-safe PDF viewing) -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
     <!-- Firebase SDKs -->
     <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js" type="module"></script>
     <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js" type="module"></script>
@@ -714,8 +714,24 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
         const status = document.getElementById('pdf-jump-status');
         const renderStatus = document.getElementById('pdf-render-status');
         const canvas = document.getElementById('pdf-canvas');
+        const wrap = document.getElementById('pdf-canvas-wrap');
+        if (wrap) {
+            wrap.style.position = 'relative';
+            let layer = document.getElementById('pdf-highlight-layer');
+            if (!layer) {
+                layer = document.createElement('div');
+                layer.id = 'pdf-highlight-layer';
+                layer.style.position = 'absolute';
+                layer.style.left = '0';
+                layer.style.top = '0';
+                layer.style.right = '0';
+                layer.style.bottom = '0';
+                layer.style.pointerEvents = 'none';
+                wrap.appendChild(layer);
+            }
+        }
 
-        const baseUrl = "https://gowsmk.github.io/Unified_Schedule_Viewer/Guru_2026.pdf";
+        const baseUrl = "Guru_2026.pdf";
 
         // iOS/Safari note:
         // - PDF fragment jumps (#page=) are unreliable inside <iframe>
@@ -733,7 +749,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
         let pdfDoc = null;
         if (pdfjs && pdfjs.GlobalWorkerOptions) {
             // Use CDN worker for reliability
-            pdfjs.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.js";
+            pdfjs.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
             // iOS Safari is more stable without a web worker for PDF.js
             if (isIOS) {
                 try { pdfjs.disableWorker = true; } catch (_) {}
@@ -750,7 +766,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
             if (!/^https?:$/i.test(location.protocol)) {
                 throw new Error('PDF preview requires https hosting (GitHub Pages).');
             }
-            pdfDoc = await pdfjs.getDocument({ url: baseUrl }).promise;
+            pdfDoc = await pdfjs.getDocument({ url: baseUrl, disableRange: true, disableStream: true, disableAutoFetch: true }).promise;
             return pdfDoc;
         }
 
@@ -771,11 +787,702 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
                 canvas.height = Math.floor(viewport.height);
                 if (renderStatus) renderStatus.textContent = `Showing page ${pageNum}`;
                 await page.render({ canvasContext: ctx, viewport }).promise;
-            } catch (err) {
-                console.error('PDF render error:', err);
-                if (renderStatus) renderStatus.textContent = 'Unable to render PDF preview here. Tap "Open PDF" (opens correct page), or host this file on HTTPS to enable preview.';
-            }
+                canvas.__pageViewport = viewport;
+
+                // --- Overlay highlights (relief assignments) ---
+                // Best-effort mapping of (day, time) into the timetable grid.
+                try {
+                    const daySel = document.getElementById('relief-day-select');
+                    const dayKeyRaw = String((daySel && daySel.value) || '').trim();
+                    const dayKey = dayKeyRaw.toUpperCase();
+                    const teacherUpper = String((jumper && jumper.value) || '').trim().toUpperCase();
+
+                    // Gather all assigned time ranges for this teacher on the selected day
+                    const timeRanges = [];
+                    const slotCards = document.querySelectorAll('#relief-slots > div');
+                    slotCards.forEach(card => {
+                        const sel = card.querySelector('select');
+                        const timeEl = card.querySelector('span');
+                        if (!sel || !timeEl) return;
+                        const val = String(sel.value || '').trim().toUpperCase();
+                        if (!val) return;
+                        if (val === teacherUpper) {
+                            const t = String(timeEl.textContent || '').trim();
+                            if (t && t.includes('-')) timeRanges.push(t);
+                        }
+                    });
+
+                    // If nothing in the list yet, fallback to last-clicked slot highlight
+                    if (timeRanges.length === 0 && window.__pdfHighlight) {
+                        const h = window.__pdfHighlight;
+                        if (String(h.teacherName || '').trim().toUpperCase() === teacherUpper &&
+                            String(h.dayKey || '').trim().toUpperCase() === dayKey) {
+                            const t = String(h.slot || '').trim();
+                            if (t && t.includes('-')) timeRanges.push(t);
+                        }
+                    }
+
+                    if (timeRanges.length) {
+                        // Use the actual PDF canvas dimensions; `viewer` is not defined in this build.
+                        const W = canvas.width, H = canvas.height;
+                        const gridLeft = W * 0.17;
+                        const gridRight = W * 0.975;
+                        const gridTop = H * 0.24;
+                        const gridBottom = H * 0.93;
+	                        // NOTE: Use double-quoted keys to avoid breaking on JUMA'AT.
+	                        const dayMap = { "ISNIN": 0, "MON": 0, "MONDAY": 0,
+	                                         "SELASA": 1, "TUE": 1, "TUESDAY": 1,
+	                                         "RABU": 2, "WED": 2, "WEDNESDAY": 2,
+	                                         "KHAMIS": 3, "THU": 3, "THURSDAY": 3,
+	                                         "JUMAAT": 4, "JUMA'AT": 4, "FRI": 4, "FRIDAY": 4 };
+                        const dayIdx = (dayMap[dayKey] != null) ? dayMap[dayKey] : 4;
+                        const rowH = (gridBottom - gridTop) / 5;
+
+                        // Time boundaries used for proportional column mapping
+                        const bounds = [
+                            7*60+15, 7*60+45, 8*60+15, 8*60+45, 9*60+15, 9*60+45,
+                            10*60+0, 10*60+15, 10*60+30, 11*60+0, 11*60+30,
+                            12*60+0, 12*60+30, 13*60+0, 13*60+30,
+                            14*60+0, 14*60+30, 15*60+0, 15*60+30
+                        ];
+                        const segs = bounds.length - 1;
+                        const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+                                                function toMinutes(t){
+                            const m = String(t || '').trim().match(/(\d{1,2})\s*[:\.]\s*(\d{2})/);
+                            if (!m) return null;
+                            return parseInt(m[1], 10)*60 + parseInt(m[2], 10);
+                        }
+                        function nearestIndex(mins){
+                            let best = 0, bestD = Infinity;
+                            for (let i=0;i<bounds.length;i++){
+                                const d = Math.abs(bounds[i]-mins);
+                                if (d < bestD){ bestD=d; best=i; }
+                            }
+                            return best;
+                        }
+
+                        // Draw highlights on a dedicated overlay canvas (layered above the PDF canvas)
+                        // so they remain visible and are not overwritten by pdf.js internal re-renders.
+                        const wrap = document.getElementById('pdfPageWrap') || canvas.parentElement;
+                        if (wrap) wrap.style.position = wrap.style.position || 'relative';
+                        let ov = document.getElementById('pdfHighlightOverlay');
+                        if (!ov) {
+                            ov = document.createElement('canvas');
+                            ov.id = 'pdfHighlightOverlay';
+                            ov.style.position = 'absolute';
+                            ov.style.left = '0';
+                            ov.style.top = '0';
+                            ov.style.width = '100%';
+                            ov.style.height = '100%';
+                            ov.style.pointerEvents = 'none';
+                            ov.style.zIndex = '5';
+                            wrap.appendChild(ov);
+                        }
+                        ov.width = canvas.width;
+                        ov.height = canvas.height;
+                        const octx = ov.getContext('2d');
+                        octx.clearRect(0, 0, ov.width, ov.height);
+
+                        octx.save();
+                        octx.globalAlpha = 0.35;
+                        octx.fillStyle = '#FFD54F';
+                        octx.strokeStyle = '#FF6F00';
+                        octx.lineWidth = Math.max(2, W * 0.0025);
+
+                        const y = gridTop + dayIdx * rowH;
+                        const h = rowH;
+
+                        timeRanges.forEach(tr => {
+                            const m = String(tr).match(/(\d{1,2}\s*[:\.]\s*\d{2})\s*-\s*(\d{1,2}\s*[:\.]\s*\d{2})/);
+                            if (!m) return;
+                            const sMin = toMinutes(m[1]);
+                            const eMin = toMinutes(m[2]);
+                            if (sMin == null || eMin == null) return;
+                            const i0 = clamp(nearestIndex(sMin), 0, segs-1);
+                            const i1 = clamp(nearestIndex(eMin), 1, segs);
+                            const x0 = gridLeft + (i0 / segs) * (gridRight - gridLeft);
+                            const x1 = gridLeft + (i1 / segs) * (gridRight - gridLeft);
+                            const w = Math.max(4, x1 - x0);
+                            octx.fillRect(x0, y, w, h);
+                            octx.strokeRect(x0, y, w, h);
+                        });
+
+                        octx.restore();
+                    }
+                } catch (e) {
+                    console.warn('PDF highlight overlay skipped:', e);
+                }
+
+
+                // Highlight ALL relief assignments for the currently-selected teacher (visual representation)
+                try {
+                    const currentTeacher = (window.__pdfCurrentTeacher || '').trim();
+                    if (currentTeacher && window.__pdfAvail && typeof window.__pdfAvail.ensureGrid === 'function') {
+                        await window.__pdfAvail.ensureGrid();
+
+                        // Collect highlights from current Relief Assignment UI (same selected day)
+                        const dayKey = String((document.getElementById('relief-day-select')?.value || '')).toUpperCase();
+                        const highlights = [];
+                        document.querySelectorAll('.relief-select').forEach(sel => {
+                            try {
+                                const v = String(sel.value || '').trim();
+                                if (!v || v.toUpperCase() != currentTeacher.toUpperCase()) return;
+                                const det = JSON.parse(sel.dataset.details || '{}');
+                                if (!det || !det.period) return;
+                                highlights.push({ day: dayKey, slot: String(det.period) });
+                            } catch (_) {}
+                        });
+
+                        // Also include any explicit highlight request (single-slot jump)
+                        if (window.__pdfHighlight && window.__pdfHighlight.page === pageNum) {
+                            highlights.push({ day: window.__pdfHighlight.day, slot: window.__pdfHighlight.slot });
+                        }
+
+                        // De-duplicate
+                        const seen = new Set();
+                        const uniq = highlights.filter(h => {
+                            const k = `${h.day}::${h.slot}`;
+                            if (seen.has(k)) return false;
+                            seen.add(k);
+                            return true;
+                        });
+
+                        // Draw overlay rectangles
+                        if (uniq.length) {
+                            for (const h of uniq) {
+                                const b = window.__pdfAvail.getRangeBounds ? window.__pdfAvail.getRangeBounds(h.day, h.slot) : (window.__pdfAvail.getCellBounds ? window.__pdfAvail.getCellBounds(h.day, h.slot) : null);
+                                if (!b) continue;
+                                // Convert PDF-space bounds into canvas (viewport) space (y-axis corrected)
+                                const rect = viewport.convertToViewportRectangle([b.xMin, b.yMin, b.xMax, b.yMax]);
+                                const x = Math.max(0, Math.floor(Math.min(rect[0], rect[2])));
+                                const yTop = Math.max(0, Math.floor(Math.min(rect[1], rect[3])));
+                                const w = Math.max(1, Math.floor(Math.abs(rect[2] - rect[0])));
+                                const hgt = Math.max(1, Math.floor(Math.abs(rect[3] - rect[1])));
+
+                                // Reuse the same overlay canvas if available; fall back to PDF canvas.
+                                const drawCtx = (typeof octx !== 'undefined' && octx) ? octx : ctx;
+                                drawCtx.save();
+                                drawCtx.fillStyle = 'rgba(34, 197, 94, 0.20)';
+                                drawCtx.strokeStyle = 'rgba(21, 128, 61, 0.95)';
+                                drawCtx.lineWidth = 3;
+                                drawCtx.fillRect(x, yTop, w, hgt);
+                                drawCtx.strokeRect(x, yTop, w, hgt);
+                                drawCtx.restore();
+                            }
+                        }
+                    }
+                } catch (_) {}
+
+	            } catch (err) {
+	                if (err && (err.name === 'RenderingCancelledException' || String(err).includes('Rendering cancelled'))) { return; }
+	                // iOS Safari often logs Error objects as `{}`; expand it for debugging.
+	                const errInfo = {
+	                    name: err?.name,
+	                    message: err?.message,
+	                    stack: err?.stack,
+	                    asString: (() => { try { return String(err); } catch (_) { return null; } })()
+	                };
+	                console.error('PDF render error:', errInfo);
+	                if (renderStatus) renderStatus.textContent = `Unable to render PDF preview here. (${errInfo.message || errInfo.asString || "Unknown error"}) Tap "Open PDF" to open the page in a new tab.`;
+	            }
         }
+
+
+
+        // ============================
+        // PDF AUTHORITY AVAILABILITY (Option 1)
+        // Uses FARIS as reference to auto-calibrate PDF grid, then decides FREE/BUSY for a teacher at a given day+slot.
+        // ============================
+        const PDF_AUTH = (() => {
+            const REF_TEACHER = "FARIS";
+            const cache = new Map(); // key: teacher|day|slot -> 'FREE'|'BUSY'|'UNKNOWN'
+            let grid = null;
+            let loadingGrid = null;
+
+            const DAY_KEYS = ["ISNIN","SELASA","RABU","KHAMIS","JUMAAT"];
+
+            function normTeacherKey(name) {
+                const n = normalizeTeacherName(name || "").toUpperCase();
+                const keys = Object.keys(TEACHER_PDF_MAPPING);
+                if (keys.includes(n)) return n;
+                const found = keys.find(k => n.includes(k) || k.includes(n));
+                return found || "";
+            }
+
+            function normTime(s) {
+                const m = String(s || "").trim().replace(/\./g, ':').match(/(\d{1,2}):(\d{2})/);
+                if (!m) return "";
+                const hh = String(parseInt(m[1], 10)).padStart(2, '0');
+                const mm = String(parseInt(m[2], 10)).padStart(2, '0');
+                return `${hh}:${mm}`;
+            }
+
+            function slotStart(slot) {
+                const st = String(slot || "").split('-')[0];
+                return normTime(st);
+            }
+
+            function timeToMin(t) {
+                const m = String(t || "").match(/(\d{1,2}):(\d{2})/);
+                if (!m) return 0;
+                return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+            }
+
+            function isTimeToken(txt) {
+                return /(\d{1,2}[:.]\d{2})/.test(txt);
+            }
+
+            async function ensureGrid() {
+                if (grid) return grid;
+                if (loadingGrid) return loadingGrid;
+
+                loadingGrid = (async () => {
+                    const doc = await ensurePdfLoaded();
+                    const refKey = normTeacherKey(REF_TEACHER) || REF_TEACHER;
+                    const refPageNo = TEACHER_PDF_MAPPING[refKey] || 1;
+
+                    const page = await doc.getPage(refPageNo);
+                    const viewport = page.getViewport({ scale: 1 });
+                    const text = await page.getTextContent();
+
+                    const times = new Map(); // t -> xs[]
+                    const daysPos = {};      // day -> y
+
+                    let maxY = 0;
+                    for (const it of (text.items || [])) {
+                        const tr = it.transform || [];
+                        const y = tr[5] ?? 0;
+                        if (y > maxY) maxY = y;
+                    }
+
+                    // In PDF.js coordinate system, larger y is closer to the top.
+                    const TOP_Y = maxY * 0.80;
+
+                    for (const it of (text.items || [])) {
+                        const s = (it.str || '').trim();
+                        if (!s) continue;
+                        const tr = it.transform || [];
+                        const x = tr[4] ?? 0;
+                        const y = tr[5] ?? 0;
+                        const up = s.toUpperCase();
+
+                        if (DAY_KEYS.includes(up)) {
+                            if (!daysPos[up] || y > daysPos[up]) daysPos[up] = y;
+                            continue;
+                        }
+
+                        if (y >= TOP_Y && isTimeToken(s)) {
+                            const t = normTime(s);
+                            if (!t) continue;
+                            if (!times.has(t)) times.set(t, []);
+                            times.get(t).push(x);
+                        }
+                    }
+
+                    const timeList = [];
+                    for (const [t, xs] of times.entries()) {
+                        if (!xs || xs.length === 0) continue;
+                        xs.sort((a, b) => a - b);
+                        const mid = xs[Math.floor(xs.length / 2)];
+                        timeList.push({ t, x: mid });
+                    }
+                    timeList.sort((a, b) => a.x - b.x);
+
+                    if (timeList.length < 6) {
+                        grid = { ok: false, reason: 'Not enough time columns detected on FARIS page.' };
+                        return grid;
+                    }
+
+                    const xBounds = {};
+                    for (let i = 0; i < timeList.length; i++) {
+                        const cur = timeList[i];
+                        const left = timeList[i - 1];
+                        const right = timeList[i + 1];
+                        const minX = left ? (left.x + cur.x) / 2 : 0;
+                        const maxX = right ? (cur.x + right.x) / 2 : viewport.width;
+                        xBounds[cur.t] = { minX, maxX };
+                    }
+
+                    const dayList = Object.entries(daysPos)
+                        .map(([d, y]) => ({ d, y }))
+                        .sort((a, b) => b.y - a.y); // top to bottom
+
+                    const yBounds = {};
+                    for (let i = 0; i < dayList.length; i++) {
+                        const cur = dayList[i];
+                        const above = dayList[i - 1];
+                        const below = dayList[i + 1];
+                        const maxYb = above ? (above.y + cur.y) / 2 : viewport.height;
+                        const minYb = below ? (cur.y + below.y) / 2 : 0;
+                        yBounds[cur.d] = { minY: minYb, maxY: maxYb };
+                    }
+
+                    grid = { ok: true, timeList, xBounds, yBounds };
+                    return grid;
+                })();
+
+                return loadingGrid;
+            }
+
+            function pickNearestTimeColumn(startHHMM, timeList) {
+                const target = timeToMin(startHHMM);
+                let best = timeList[0];
+                let bestDist = Math.abs(timeToMin(best.t) - target);
+                for (const item of timeList) {
+                    const d = Math.abs(timeToMin(item.t) - target);
+                    if (d < bestDist) {
+                        best = item;
+                        bestDist = d;
+                    }
+                }
+                return best;
+            }
+
+            function cellHasText(items, xMin, xMax, yMin, yMax) {
+                for (const it of (items || [])) {
+                    const s = (it.str || '').trim();
+                    if (!s) continue;
+                    const up = s.toUpperCase();
+                    if (DAY_KEYS.includes(up)) continue;
+                    if (isTimeToken(s)) continue;
+
+                    const tr = it.transform || [];
+                    const x = tr[4] ?? 0;
+                    const y = tr[5] ?? 0;
+
+                    if (x >= xMin && x <= xMax && y >= yMin && y <= yMax) {
+                        if (s.length >= 2) return true;
+                    }
+                }
+                return false;
+            }
+
+            async function isFree(teacherName, day, slot) {
+                const teacherKey = normTeacherKey(teacherName);
+                const d = String(day || '').toUpperCase();
+                const st = slotStart(slot);
+
+                if (!teacherKey || !TEACHER_PDF_MAPPING[teacherKey] || !DAY_KEYS.includes(d) || !st) {
+                    return 'UNKNOWN';
+                }
+
+                const cacheKey = `${teacherKey}|${d}|${slot}`;
+                if (cache.has(cacheKey)) return cache.get(cacheKey);
+
+                const g = await ensureGrid();
+                if (!g || !g.ok) {
+                    cache.set(cacheKey, 'UNKNOWN');
+                    return 'UNKNOWN';
+                }
+
+                const doc = await ensurePdfLoaded();
+                const pageNo = TEACHER_PDF_MAPPING[teacherKey] || 1;
+                const page = await doc.getPage(pageNo);
+                const text = await page.getTextContent();
+
+                const timeCol = pickNearestTimeColumn(st, g.timeList);
+                const xb = g.xBounds[timeCol.t];
+                const yb = g.yBounds[d];
+
+                if (!xb || !yb) {
+                    cache.set(cacheKey, 'UNKNOWN');
+                    return 'UNKNOWN';
+                }
+
+                const busy = cellHasText(text.items, xb.minX, xb.maxX, yb.minY, yb.maxY);
+                const status = busy ? 'BUSY' : 'FREE';
+                cache.set(cacheKey, status);
+                return status;
+            }
+
+            function getCellBounds(day, slot) {
+                const d = String(day || "").toUpperCase();
+                const st = slotStart(slot);
+                if (!DAY_KEYS.includes(d) || !st) return null;
+                if (!grid || !grid.ok) return null;
+                const timeCol = pickNearestTimeColumn(st, grid.timeList);
+                const xb = grid.xBounds[timeCol.t];
+                const yb = grid.yBounds[d];
+                if (!xb || !yb) return null;
+                return { xMin: xb.minX, xMax: xb.maxX, yMin: yb.minY, yMax: yb.maxY, col: timeCol.t };
+            }
+
+            function slotEnd(slot) {
+                const parts = String(slot || '').trim().split('-');
+                if (parts.length < 2) return '';
+                return normTime(parts[1]);
+            }
+
+            function getRangeBounds(day, slotRange) {
+                const d = String(day || '').toUpperCase();
+                const st = slotStart(slotRange);
+                const en0 = slotEnd(slotRange);
+                if (!DAY_KEYS.includes(d) || !st) return null;
+                if (!grid || !grid.ok) return null;
+
+                // Start column
+                const startCol = pickNearestTimeColumn(st, grid.timeList);
+                const xb1 = grid.xBounds[startCol.t];
+
+                // End column: use end time minus 1 minute so we land inside the final covered column
+                let endTime = en0;
+                if (endTime) {
+                    const mins = timeToMin(endTime);
+                    const adj = Math.max(0, mins - 1);
+                    const hh = String(Math.floor(adj / 60)).padStart(2, '0');
+                    const mm = String(adj % 60).padStart(2, '0');
+                    endTime = `${hh}:${mm}`;
+                }
+                const endCol = endTime ? pickNearestTimeColumn(endTime, grid.timeList) : startCol;
+                const xb2 = grid.xBounds[endCol.t];
+
+                const yb = grid.yBounds[d];
+                if (!xb1 || !xb2 || !yb) return null;
+
+                const xMin = Math.min(xb1.minX, xb2.minX);
+                const xMax = Math.max(xb1.maxX, xb2.maxX);
+                return { xMin, xMax, yMin: yb.minY, yMax: yb.maxY, colStart: startCol.t, colEnd: endCol.t };
+            }
+
+            async function annotateSelect(selectEl, rankedList, day, slot) {
+                if (!selectEl || !Array.isArray(rankedList) || rankedList.length === 0) return;
+
+                const prevVal = selectEl.value;
+                selectEl.disabled = true;
+
+                const limited = rankedList.slice(0, 30);
+                const results = [];
+
+                for (const r of limited) {
+                    const st = await isFree(r.name, day, slot);
+                    results.push({ ...r, pdf: st });
+                }
+
+                const grp = (x) => x.pdf === 'FREE' ? 0 : (x.pdf === 'UNKNOWN' ? 1 : 2);
+                results.sort((a, b) => (grp(a) - grp(b)) || (a.score - b.score) || a.name.localeCompare(b.name));
+
+                                // Preserve the current selection even if it is not in the new ranked list
+                let optionsHtml = `<option value="">-- Assign --</option>`;
+
+                // If user already assigned someone (prevVal), keep it visible and selected
+                if (prevVal && prevVal.trim()) {
+                    const prevName = prevVal.trim();
+                    const existsInResults = results.some(x => x.name === prevName);
+                    if (!existsInResults) {
+                        const stPrev = await isFree(prevName, day, slot);
+                        const tagPrev = stPrev === 'FREE' ? '(FREE-PDF)' : (stPrev === 'BUSY' ? '(BUSY-PDF)' : '(UNKNOWN-PDF)');
+                        optionsHtml += `<option value="${prevName}">${prevName} (ASSIGNED) ${tagPrev}</option>`;
+                    }
+                }
+
+                for (const r of results) {
+                    const tag = r.pdf === 'FREE' ? '(FREE-PDF)' : (r.pdf === 'BUSY' ? '(BUSY-PDF)' : '(UNKNOWN-PDF)');
+                    optionsHtml += `<option value="${r.name}">${r.name} ${tag}</option>`;
+                }
+
+                selectEl.innerHTML = optionsHtml;
+
+                // Restore existing selection if present
+                if (prevVal && prevVal.trim()) {
+                    selectEl.value = prevVal;
+                } else {
+                    // AUTO-PICK (Improved): choose the best PDF-eligible candidate that does NOT create
+                    // a same-time collision (one relief teacher cannot cover 2 classes at the same period).
+                    // Preference order: FREE-PDF (no collision) -> UNKNOWN-PDF (no collision) -> leave blank.
+
+                    // Build a set of teachers already assigned in any OVERLAPPING time range.
+                    // (Important: slots can overlap, e.g. 7:15-8:15 and 7:45-8:15.)
+                    const usedAtOverlap = new Set();
+
+                    const toMinutes = (t) => {
+                        const m = String(t || '').trim().replace('.', ':').match(/(\d{1,2}):(\d{2})/);
+                        if (!m) return null;
+                        const hh = parseInt(m[1], 10);
+                        const mm = parseInt(m[2], 10);
+                        return (hh * 60) + mm;
+                    };
+
+                    const rangeTo = (rng) => {
+                        const parts = String(rng || '').trim().split('-');
+                        if (parts.length < 2) return null;
+                        const a = toMinutes(parts[0]);
+                        const b = toMinutes(parts[1]);
+                        if (a == null || b == null) return null;
+                        return { start: a, end: b };
+                    };
+
+                    const overlaps = (a, b) => {
+                        const ra = rangeTo(a);
+                        const rb = rangeTo(b);
+                        if (!ra || !rb) return false;
+                        // Treat touching edges as non-overlap (end==start is OK)
+                        return ra.start < rb.end && rb.start < ra.end;
+                    };
+
+                    try {
+                        const all = document.querySelectorAll('.relief-select');
+                        all.forEach(other => {
+                            if (!other || other === selectEl) return;
+                            const det = JSON.parse(other.dataset.details || '{}');
+                            if (!other.value || !det || !det.period) return;
+                            if (overlaps(det.period, slot)) usedAtOverlap.add(String(other.value).trim());
+                        });
+                    } catch (e) {}
+
+                    // Smarter constraints:
+                    // 1) No overlap (already enforced via usedAtOverlap)
+                    // 2) No back-to-back (or too-short gap) for the same relief teacher
+                    // 3) Workload balancing: avoid over-assigning one teacher in a day
+
+                    const MIN_GAP_MINUTES = 20;       // rest buffer
+                    const MAX_ASSIGNMENTS_PER_DAY = 2; // soft cap
+
+                    // Build current assigned ranges per teacher (for this day view)
+                    const assigned = new Map(); // name -> [{start,end}]
+                    try {
+                        const all = document.querySelectorAll('.relief-select');
+                        all.forEach(other => {
+                            if (!other || !other.value) return;
+                            const nm = String(other.value).trim();
+                            const det = JSON.parse(other.dataset.details || '{}');
+                            if (!det || !det.period) return;
+                            const rr = rangeTo(det.period);
+                            if (!rr) return;
+                            if (!assigned.has(nm)) assigned.set(nm, []);
+                            assigned.get(nm).push(rr);
+                        });
+                    } catch (e) {}
+
+                    const slotRange = rangeTo(slot);
+
+                    const teacherCount = (name) => (assigned.get(String(name).trim()) || []).length;
+
+                    const minGapToSlot = (name) => {
+                        const list = assigned.get(String(name).trim()) || [];
+                        if (!slotRange) return Infinity;
+                        let best = Infinity;
+                        for (const rr of list) {
+                            // Overlap already handled, but keep safe:
+                            if (rr.start < slotRange.end && slotRange.start < rr.end) {
+                                return 0;
+                            }
+                            if (rr.end <= slotRange.start) {
+                                best = Math.min(best, slotRange.start - rr.end);
+                            } else if (rr.start >= slotRange.end) {
+                                best = Math.min(best, rr.start - slotRange.end);
+                            }
+                        }
+                        return best;
+                    };
+
+                    const isBackToBack = (name) => {
+                        const gap = minGapToSlot(name);
+                        return gap <= MIN_GAP_MINUTES;
+                    };
+
+	                    const canUse = (name, allowShortGap = false) => {
+                        const nm = String(name || '').trim();
+                        if (!nm) return false;
+                        if (usedAtOverlap.has(nm)) return false;
+	                        // hard reject if back-to-back (or too short gap)
+	                        // If we cannot fill all slots, we will relax this constraint as a last resort.
+	                        if (!allowShortGap && isBackToBack(nm)) return false;
+                        // soft cap: allow if under cap; if everyone exceeds cap, we may relax later
+                        return true;
+                    };
+
+                    // Candidate scoring (Option A: smarter):
+                    // - HARD prefer FREE-PDF (known free in timetable)
+                    // - UNKNOWN-PDF only if necessary (PDF text parsing could not confirm)
+                    // - Enforce: no overlap, >= MIN_GAP_MINUTES rest gap, and max 2 assignments/day
+                    // - Balance workload: prefer teachers with fewer assignments today
+
+                    const pdfBonus = (p) => (p === 'FREE' ? 100 : (p === 'UNKNOWN' ? 10 : -1000));
+
+	                    const eligible = results
+	                        .filter(r => (r.pdf === 'FREE' || r.pdf === 'UNKNOWN') && canUse(r.name, false))
+	                        .filter(r => teacherCount(r.name) < MAX_ASSIGNMENTS_PER_DAY);
+
+	                    // If everyone is already at cap, allow candidates at/over cap (still no overlap / no back-to-back)
+	                    const relaxedCap = results
+	                        .filter(r => (r.pdf === 'FREE' || r.pdf === 'UNKNOWN') && canUse(r.name, false));
+
+	                    // Last-resort: if we still cannot fill a slot, relax the rest-gap constraint (still no overlap)
+	                    const relaxedGap = results
+	                        .filter(r => (r.pdf === 'FREE' || r.pdf === 'UNKNOWN') && canUse(r.name, true))
+	                        .filter(r => teacherCount(r.name) < MAX_ASSIGNMENTS_PER_DAY);
+
+	                    const pool = eligible.length
+	                        ? eligible
+	                        : (relaxedCap.length ? relaxedCap : relaxedGap);
+
+                    // Score: higher is better
+                    const scoreCandidate = (r) => {
+                        const nm = String(r.name||'').trim();
+                        const count = teacherCount(nm);
+                        const gap = minGapToSlot(nm);
+                        const gapPenalty = (gap < 60 ? (60 - gap) * 0.2 : 0);
+                        return (pdfBonus(r.pdf)
+                            - (count * 25)
+                            - gapPenalty
+                            - (r.score * 0.05));
+                    };
+
+                    let pick = null;
+                    if (pool.length) {
+                        pool.sort((a,b) =>
+                            (scoreCandidate(b) - scoreCandidate(a)) ||
+                            (teacherCount(a.name) - teacherCount(b.name)) ||
+                            a.name.localeCompare(b.name)
+                        );
+                        pick = pool[0];
+                    }
+
+                    if (pick && pick.name) {
+                        selectEl.value = pick.name;
+                        // Trigger downstream persistence + conflict checks
+                        selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+                    } else {
+                        // Fallback (last resort): allow back-to-back only if NOTHING else fits.
+                        // Still blocks true time overlaps.
+                        const fallbackPool = results
+                            .filter(r => (r.pdf === 'FREE' || r.pdf === 'UNKNOWN'))
+                            .filter(r => {
+                                const nm = String(r.name || '').trim();
+                                if (!nm) return false;
+                                if (usedAtOverlap.has(nm)) return false;
+                                return true;
+                            });
+
+                        if (fallbackPool.length) {
+                            fallbackPool.sort((a,b) =>
+                                (scoreCandidate(b) - scoreCandidate(a)) ||
+                                (teacherCount(a.name) - teacherCount(b.name)) ||
+                                a.name.localeCompare(b.name)
+                            );
+                            const fb = fallbackPool[0];
+                            if (fb && fb.name) {
+                                selectEl.value = fb.name;
+                                selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+                                selectEl.setAttribute('data-relaxed-assign', '1');
+                            } else {
+                                selectEl.value = '';
+                            }
+                        } else {
+                            // No safe candidate found; keep unassigned
+                            selectEl.value = '';
+                        }
+                    }
+                }
+
+                selectEl.disabled = false;
+            }
+
+            return { ensureGrid, isFree, annotateSelect, getCellBounds };
+        })();
+
+        // Expose globally so Relief View can use it
+        window.__pdfAvail = PDF_AUTH;
 
         // Populate Dropdown (teacher -> page)
         jumper.innerHTML = '<option value="1">-- Select --</option>';
@@ -822,7 +1529,16 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
         };
 
         // Expose a small hook so other UI (Relief Pool / Absent list / Relief selection) can update the PDF target
-        window.__setPdfTeacher = (name) => syncToTeacher(name, 'Selected');
+        window.__setPdfTeacher = (name, day=null, slot=null) => {
+            window.__pdfCurrentTeacher = String(name||'').trim();
+
+            const res = syncToTeacher(name, 'Selected');
+            // Store highlight request so the PDF canvas can draw it after render
+            if (day && slot) {
+                window.__pdfHighlight = { page: res.page, day: String(day||'').toUpperCase(), slot: String(slot||'') };
+            }
+            return res;
+        };
 
         const configureOpenButton = (page, label) => {
             // Open a dedicated single-page view (this same app in a new tab)
@@ -965,6 +1681,37 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
         document.getElementById('relief-search').oninput = (e) => filterList('replacement-teacher-multiselect', e.target.value);
 
         const currentSelections = new Map();
+        const absentMeta = new Map(); // teacher -> {reason, notes}
+
+        // Persist assignments + absent meta across re-renders
+        const ASSIGN_STORE_KEY = 'relief_assignments_v1';
+        const ABSENT_META_KEY  = 'absent_meta_v1';
+
+        try {
+            const savedA = JSON.parse(localStorage.getItem(ASSIGN_STORE_KEY) || '[]');
+            if (Array.isArray(savedA)) savedA.forEach(([k,v]) => currentSelections.set(k,v));
+        } catch (e) {}
+
+        try {
+            const savedM = JSON.parse(localStorage.getItem(ABSENT_META_KEY) || '{}');
+            if (savedM && typeof savedM === 'object') {
+                Object.keys(savedM).forEach(t => absentMeta.set(t, savedM[t] || {reason:'', notes:''}));
+            }
+        } catch (e) {}
+
+        const saveAssignments = () => {
+            try {
+                localStorage.setItem(ASSIGN_STORE_KEY, JSON.stringify(Array.from(currentSelections.entries())));
+            } catch (e) {}
+        };
+
+        const saveAbsentMeta = () => {
+            try {
+                const obj = {};
+                absentMeta.forEach((v,k) => obj[k] = v);
+                localStorage.setItem(ABSENT_META_KEY, JSON.stringify(obj));
+            } catch (e) {}
+        };
         
         const renderAbsentDetails = (absentList) => {
             detailsContainer.innerHTML = '';
@@ -990,6 +1737,24 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
             });
             html += '</div>';
             detailsContainer.innerHTML = html;
+
+            // Restore saved reason/notes and keep them persisted
+            absentList.forEach(t => {
+                const rs = detailsContainer.querySelector(`.absent-reason[data-teacher="${t}"]`);
+                const ni = detailsContainer.querySelector(`.absent-notes[data-teacher="${t}"]`);
+                const saved = absentMeta.get(t) || { reason: '', notes: '' };
+                if (rs) rs.value = saved.reason || '';
+                if (ni) ni.value = saved.notes || '';
+
+                if (rs) rs.onchange = () => {
+                    absentMeta.set(t, { reason: rs.value || '', notes: (ni ? (ni.value || '') : (saved.notes || '')) });
+                    saveAbsentMeta();
+                };
+                if (ni) ni.oninput = () => {
+                    absentMeta.set(t, { reason: (rs ? (rs.value || '') : (saved.reason || '')), notes: ni.value || '' });
+                    saveAbsentMeta();
+                };
+            });
         };
 
         const render = () => {
@@ -1023,13 +1788,20 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
                     return { name: r, score };
                 }).filter(Boolean).sort((a,b) => (a.score - b.score) || a.name.localeCompare(b.name));
 
+                // Base options (will be refined by PDF authority)
+                const previouslyAssigned = currentSelections.get(slotId) || '';
                 let optionsHtml = `<option value="">-- Assign --</option>`;
+
+                // Ensure an already-assigned teacher is never lost when pool list changes
+                if (previouslyAssigned && !ranked.some(x => x.name === previouslyAssigned)) {
+                    optionsHtml += `<option value="${previouslyAssigned}">${previouslyAssigned} (ASSIGNED)</option>`;
+                }
+
                 ranked.forEach(r => {
-                    let style = r.score === 0 ? 'bg-green-50 text-green-700 font-bold' : (r.score===999 ? 'bg-red-50 text-red-700' : '');
-                    let note = r.score === 0 ? '(Free)' : (r.score===999 ? '(Busy)' : '(Ok)');
-                    optionsHtml += `<option value="${r.name}" class="${style}">${r.name} ${note}</option>`;
+                    optionsHtml += `<option value="${r.name}">${r.name} (checking PDF...)</option>`;
                 });
-                if(ranked.length===0) optionsHtml = `<option value="">No relief selected</option>`;
+
+                if(ranked.length===0 && !previouslyAssigned) optionsHtml = `<option value="">No relief selected</option>`;
 
                 card.innerHTML = `
                     <div class="flex justify-between mb-1">
@@ -1041,11 +1813,19 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
                 `;
                 
                 const select = card.querySelector('select');
-                if(currentSelections.has(slotId)) select.value = currentSelections.get(slotId);
+
+                // Restore previously assigned value BEFORE PDF re-ranking (critical for preserving selection)
+                if (currentSelections.has(slotId)) select.value = currentSelections.get(slotId);
+
+                // PDF-authoritative FREE/BUSY refinement (Option 1)
+                if (window.__pdfAvail && typeof window.__pdfAvail.annotateSelect === 'function') {
+                    window.__pdfAvail.annotateSelect(select, ranked, day, s.period).catch(() => {});
+                }
                 select.onchange = (e) => {
                     currentSelections.set(slotId, e.target.value);
+                    saveAssignments();
                     // NEW: When you assign a relief teacher, sync PDF target to that teacher
-                    if (e.target.value && typeof window.__setPdfTeacher === 'function') window.__setPdfTeacher(e.target.value);
+                    if (e.target.value && typeof window.__setPdfTeacher === 'function') window.__setPdfTeacher(e.target.value, day, s.period);
                     updateConflicts();
                 };
                 container.appendChild(card);
@@ -1057,33 +1837,76 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
 
         const updateConflicts = () => {
              const allSelects = document.querySelectorAll('.relief-select');
-             const usage = new Map();
+
+             const toMinutes = (t) => {
+                 const m = String(t || '').trim().replace('.', ':').match(/(\d{1,2}):(\d{2})/);
+                 if (!m) return null;
+                 return (parseInt(m[1], 10) * 60) + parseInt(m[2], 10);
+             };
+             const rangeTo = (rng) => {
+                 const parts = String(rng || '').trim().split('-');
+                 if (parts.length < 2) return null;
+                 const a = toMinutes(parts[0]);
+                 const b = toMinutes(parts[1]);
+                 if (a == null || b == null) return null;
+                 return { start: a, end: b };
+             };
+             const overlaps = (a, b) => {
+                 const ra = rangeTo(a);
+                 const rb = rangeTo(b);
+                 if (!ra || !rb) return false;
+                 return ra.start < rb.end && rb.start < ra.end;
+             };
+
+             // Count overlapping usage per teacher per select
              allSelects.forEach(sel => {
-                 if(sel.value) {
-                     const time = JSON.parse(sel.dataset.details).period;
-                     const key = `${sel.value}|${time}`;
-                     usage.set(key, (usage.get(key) || 0) + 1);
-                 }
-             });
-             allSelects.forEach(sel => {
-                 const myVal = sel.value;
-                 const myTime = JSON.parse(sel.dataset.details).period;
-                 if(myVal && usage.get(`${myVal}|${myTime}`) > 1) sel.classList.add('border-red-500', 'bg-red-50');
-                 else sel.classList.remove('border-red-500', 'bg-red-50');
-                 Array.from(sel.options).forEach(opt => {
-                     let isTakenElsewhere = false;
-                     let strictConflict = false;
+                 const myVal = (sel.value || '').trim();
+                 const myDet = JSON.parse(sel.dataset.details || '{}');
+                 const myTime = myDet?.period || '';
+
+                 // Red border if THIS selection conflicts with any other selection for the same teacher in overlapping time.
+                 let hasOverlapConflict = false;
+                 if (myVal && myTime) {
                      allSelects.forEach(other => {
-                         if(other !== sel && other.value === opt.value) {
-                             isTakenElsewhere = true;
-                             const otherTime = JSON.parse(other.dataset.details).period;
-                             if(otherTime === myTime) strictConflict = true;
-                         }
+                         if (other === sel) return;
+                         const oVal = (other.value || '').trim();
+                         if (!oVal || oVal !== myVal) return;
+                         const oDet = JSON.parse(other.dataset.details || '{}');
+                         const oTime = oDet?.period || '';
+                         if (oTime && overlaps(oTime, myTime)) hasOverlapConflict = true;
                      });
+                 }
+                 if (hasOverlapConflict) sel.classList.add('border-red-500', 'bg-red-50');
+                 else sel.classList.remove('border-red-500', 'bg-red-50');
+
+                 // Option annotations: (Time Conflict) if picking that option would overlap with the teacher's other assignments
+                 Array.from(sel.options).forEach(opt => {
+                     const optName = (opt.value || '').trim();
+                     if (!optName) return;
+
+                     let isAssignedElsewhere = false;
+                     let wouldOverlap = false;
+
+                     allSelects.forEach(other => {
+                         if (other === sel) return;
+                         const oVal = (other.value || '').trim();
+                         if (!oVal || oVal !== optName) return;
+                         isAssignedElsewhere = true;
+                         const oDet = JSON.parse(other.dataset.details || '{}');
+                         const oTime = oDet?.period || '';
+                         if (oTime && myTime && overlaps(oTime, myTime)) wouldOverlap = true;
+                     });
+
                      opt.classList.remove('conflict-warning', 'time-conflict');
-                     opt.text = opt.text.replace(" (Assigned)", "").replace(" (Time Conflict)", "");
-                     if(strictConflict && opt.value) { opt.classList.add('time-conflict'); opt.text += " (Time Conflict)"; }
-                     else if(isTakenElsewhere && opt.value) { opt.classList.add('conflict-warning'); opt.text += " (Assigned)"; }
+                     opt.text = opt.text.replace(' (Assigned)', '').replace(' (Time Conflict)', '');
+
+                     if (wouldOverlap) {
+                         opt.classList.add('time-conflict');
+                         opt.text += ' (Time Conflict)';
+                     } else if (isAssignedElsewhere) {
+                         opt.classList.add('conflict-warning');
+                         opt.text += ' (Assigned)';
+                     }
                  });
              });
         };
@@ -1108,14 +1931,15 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
                     const det = JSON.parse(sel.dataset.details);
                     const reasonSelect = document.querySelector(`.absent-reason[data-teacher="${det.original}"]`);
                     const notesInput = document.querySelector(`.absent-notes[data-teacher="${det.original}"]`);
+                    const savedMeta = (typeof absentMeta !== 'undefined' && absentMeta.get) ? (absentMeta.get(det.original) || {reason:'', notes:''}) : {reason:'', notes:''};
                     roster.push({
                         time: det.period,
                         class: det.className,
                         subject: det.subject,
                         original: det.original,
                         relief: sel.value,
-                        reason: reasonSelect ? reasonSelect.value : '',
-                        notes: notesInput ? notesInput.value : ''
+                        reason: reasonSelect ? reasonSelect.value : (savedMeta.reason || ''),
+                        notes: notesInput ? notesInput.value : (savedMeta.notes || '')
                     });
                 }
             });
