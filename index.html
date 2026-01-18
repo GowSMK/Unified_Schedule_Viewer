@@ -2638,6 +2638,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
 </script>
 
 
+<script>
 /* === PDF FILE LOADING + GRID CALIBRATION (v11) === */
 (function(){
   const PDF_STATE = window.__PDF_STATE__ = window.__PDF_STATE__ || {};
@@ -2660,6 +2661,24 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
 
   const pdfFileInput = document.getElementById('pdfFileInput');
   const btnLoad = document.getElementById('btnLoadPdfFile');
+  const onTap = (el, fn) => {
+    if (!el) return;
+    // click for desktop + pointer devices
+    el.addEventListener('click', fn);
+    // touchstart for iOS Safari (some overlays/buttons do not reliably emit click)
+    el.addEventListener('touchstart', (e) => {
+      try { e.preventDefault(); } catch (_) {}
+      fn(e);
+    }, { passive: false });
+  };
+
+  const pointFromEvent = (e) => {
+    // Supports MouseEvent, PointerEvent, TouchEvent
+    if (e && e.touches && e.touches[0]) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    if (e && e.changedTouches && e.changedTouches[0]) return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
+    return { x: e.clientX, y: e.clientY };
+  };
+
   const btnCal = document.getElementById('btnCalibrateGrid');
   const btnClr = document.getElementById('btnClearCal');
 
@@ -2808,7 +2827,10 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
 
   // File load
   if(btnLoad){
-    if(btnLoad) btnLoad.addEventListener('click', ()=>{ if(pdfFileInput) pdfFileInput.click(); });
+    onTap(btnLoad, ()=>{
+      const fi = document.getElementById('pdfFileInput');
+      if(fi) fi.click();
+    });
   }
   if(pdfFileInput){
     pdfFileInput.addEventListener('change', async ()=>{
@@ -2828,18 +2850,14 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
 
   // Calibration buttons
   if(btnCal){
-    btnCal.addEventListener('click', ()=>{
-      calMode = 1;
-      calFirst = null;
-      toast('Calibration: tap TOP-LEFT corner of timetable grid.');
-    });
+    onTap(btnCal, ()=>{ setCalMode(true); });
   }
   if(btnClr){
-    btnClr.addEventListener('click', ()=>{
-      const pageNo = (window.__PDF_STATE__ && window.__PDF_STATE__.currentPageNo) ? window.__PDF_STATE__.currentPageNo : 1;
-      clearCal(pageNo);
-      toast('Calibration cleared for this page.');
-      if(window.reloadPdfViewer) window.reloadPdfViewer(false);
+    onTap(btnClr, ()=>{
+      calPoints = [];
+      saveCalForTeacher(null, selectedPdfTeacher);
+      drawOverlay();
+      toast('Grid points cleared');
     });
   }
 
@@ -2875,6 +2893,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
 /* === END v11 === */
 
 
+</script>
 </body>
 </html>
 
